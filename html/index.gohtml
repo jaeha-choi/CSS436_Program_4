@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CSS436 Program 4</title>
+</head>
+<body>
+<div>
+    <h1>CSS436 Program 4</h1>
+    <fieldset>
+        <legend>Blob Upload/Clear</legend>
+        <form action="/load" method="POST">
+            <div>
+                <label>
+                    URL of test file:
+                    <input type="text" name="url">
+                    <input type="submit" value="Upload">
+                </label>
+            </div>
+        </form>
+        <form action="/clear" method="POST">
+            <div>
+                <label>
+                    Clear data
+                    <input type="submit" value="Clear">
+                </label>
+            </div>
+        </form>
+    </fieldset>
+    <fieldset>
+        <legend>Query Input</legend>
+        <form action="/q" method="GET">
+            <div>
+                <label>
+                    First Name:
+                    <input type="text" name="first">
+                </label>
+            </div>
+            <div>
+                <label>
+                    Last Name:
+                    <input type="text" name="last">
+                </label>
+            </div>
+            <div>
+                <input type="submit" value="Query">
+            </div>
+        </form>
+    </fieldset>
+    <fieldset>
+        <legend>Result</legend>
+        {{- /*gotype: CSS436_Program_4.Result*/ -}}
+        {{if .Success}}
+        <p>{{.Msg}}</p>
+        {{else}}
+        <p>Error: {{.Msg}}</p>
+    </fieldset>
+</div>
+
+</body>
+</html>
+{{end}}
