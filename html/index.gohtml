@@ -9,7 +9,7 @@
     <h1>CSS436 Program 4</h1>
     <fieldset>
         <legend>Blob Upload/Clear</legend>
-        <form action="/load" method="POST">
+        <form id="load_form" action="javascript:loadFunc().then()">
             <div>
                 <label>
                     URL of test file:
@@ -18,7 +18,7 @@
                 </label>
             </div>
         </form>
-        <form action="/clear" method="POST">
+        <form action="javascript:clearFunc().then()">
             <div>
                 <label>
                     Clear data
@@ -29,7 +29,7 @@
     </fieldset>
     <fieldset>
         <legend>Query Input</legend>
-        <form action="/q" method="GET">
+        <form id="query_form" action="javascript:queryFunc().then()">
             <div>
                 <label>
                     First Name:
@@ -49,14 +49,77 @@
     </fieldset>
     <fieldset>
         <legend>Result</legend>
-        {{- /*gotype: CSS436_Program_4.Result*/ -}}
-        {{if .Success}}
-        <p>{{.Msg}}</p>
-        {{else}}
-        <p>Error: {{.Msg}}</p>
+        <div id="result-status"><p></p></div>
+        <div id="result-output"></div>
     </fieldset>
 </div>
+<script type="text/javascript">
+    async function helper(request, init) {
+        const status = document.getElementById("result-status");
+        const output = document.getElementById("result-output");
+        status.innerHTML = "<p>Status: waiting...</p>";
+        output.innerHTML = "";
 
+        fetch(request, init)
+            .then(function (response) {
+                return response.json();
+            })
+            .then(function (j) {
+                let statStr;
+                if (j["success"]) {
+                    statStr = "success";
+                } else {
+                    statStr = "fail";
+                }
+                status.innerHTML = "<p>Status: " + statStr + "</p>";
+
+                if (j["is_query"] && j["success"]) {
+                    let list = document.createElement("ul");
+                    j["query_res"].forEach((line) => {
+                        let liElem = document.createElement("li");
+                        liElem.innerText = line;
+                        list.appendChild(liElem);
+                    })
+                    output.appendChild(list);
+                    return;
+                }
+
+                output.innerHTML = "<p>" + j["msg"] + "</p>";
+            })
+            .catch(function (err) {
+                console.debug(err);
+                status.innerHTML = "<p>Unknown error occurred</p>";
+            })
+    }
+
+    async function loadFunc() {
+        const url = document.getElementById("load_form");
+        const urlData = new FormData(url);
+        await helper("/load", {
+            method: "POST",
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: new URLSearchParams(urlData)
+        });
+    }
+
+    async function clearFunc() {
+        await helper("/clear", {
+            method: "POST",
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+        });
+    }
+
+    async function queryFunc() {
+        const q = document.getElementById("query_form");
+        const qData = new FormData(q);
+        await helper("/q?" + new URLSearchParams(qData), {
+            method: "GET",
+        });
+    }
+</script>
 </body>
 </html>
-{{end}}

@@ -16,20 +16,29 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 const SizeLimit int = 1 << 20
 
+// This program always uses a table name starting with "prog4"
+const tableName string = "prog4"
+
 type Server struct {
-	blobClient   azblob.BlockBlobClient
-	tableClient  *aztables.Client
-	rootTemplate *template.Template
-	log          *Logger
+	blobClient         azblob.BlockBlobClient
+	tableMutex         sync.Mutex
+	tableClient        *aztables.Client
+	tableServiceClient *aztables.ServiceClient
+	rootTemplate       *template.Template
+	log                *Logger
 }
 
 type Result struct {
-	Success bool
-	Msg     string
+	IsQuery  bool     `json:"is_query"`
+	QueryRes []string `json:"query_res"`
+	Success  bool     `json:"success"`
+	Msg      string   `json:"msg"`
 }
 
 func initialize() (server *Server, err error) {
@@ -46,50 +55,97 @@ func initialize() (server *Server, err error) {
 	if err != nil {
 		return nil, err
 	}
+
 	tableCred, err := aztables.NewSharedKeyCredential(os.Getenv("PROG_4_AZURE_ACCOUNT"), os.Getenv("PROG_4_AZURE_KEY"))
 	if err != nil {
 		return nil, err
 	}
-	server.tableClient, err = aztables.NewClientWithSharedKey(os.Getenv("PROG_4_TABLE_URL"), tableCred, nil)
+
+	server.tableServiceClient, err = aztables.NewServiceClientWithSharedKey(os.Getenv("PROG_4_TABLE_URL"), tableCred, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	f := fmt.Sprintf("TableName ge '%s'", tableName)
+	pager := server.tableServiceClient.ListTables(&aztables.ListTablesOptions{
+		Filter: &f,
+	})
+
+	hasPage := pager.NextPage(context.TODO())
+	if !hasPage {
+		server.log.Debug("no table found, creating new table")
+		server.tableClient, err = server.createNewTable()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		resp := pager.PageResponse()
+		server.log.Debug("length of tables found:", len(resp.Tables))
+		if len(resp.Tables) == 1 {
+			server.log.Debug("name of the table found:", *resp.Tables[0].TableName)
+			server.tableClient = server.tableServiceClient.NewClient(*resp.Tables[0].TableName)
+		} else {
+			// If there are more than one table, panic
+			panic("too many tables starting with tableName const")
+		}
 	}
 
 	return server, nil
 }
 
-// DONE
-func (server *Server) clear() (errStr string) {
+func (server *Server) createNewTable() (*aztables.Client, error) {
+	name := fmt.Sprintf("%s%d", tableName, time.Now().UnixNano())
+	return server.tableServiceClient.CreateTable(context.TODO(), name, nil)
+}
+
+func (server *Server) clear(res *Result) {
 	// Delete table
 	_, err := server.tableClient.Delete(context.TODO(), nil)
 	if err != nil {
 		server.log.Error(err)
-		return "error while deleting table"
+		res.Msg = "error while deleting table"
+		return
 	}
 
-	// Create empty table
-	_, err = server.tableClient.Create(context.TODO(), nil)
-	if err != nil {
-		server.log.Error(err)
-		return "error while creating table after deletion"
-	}
-
+	// Delete file
 	_, err = server.blobClient.Delete(context.TODO(), nil)
 	if err != nil {
 		server.log.Error(err)
-		return "error while deleting blob object"
+		res.Msg = "error while deleting blob object"
+		return
 	}
 
-	return ""
+	// Create new empty table to use
+	server.tableClient, err = server.createNewTable()
+	if err != nil {
+		server.log.Error(err)
+		res.Msg = "error while creating table after deletion"
+		return
+	}
+
+	res.Success = true
+	res.Msg = "cleared blob/table"
+	return
 }
 
-// DONE
-func (server *Server) load(urlStr string) (errStr string) {
+func (server *Server) load(result *Result, urlStr string) {
+	if _, err := url.ParseRequestURI(urlStr); err != nil {
+		result.Msg = "invalid url"
+		return
+	}
+	_, err := server.blobClient.StartCopyFromURL(context.TODO(), urlStr, nil)
+	if err != nil {
+		server.log.Error(err)
+		result.Msg = err.Error()
+		return
+	}
+
 	//Download from the URL
 	resp, err := http.Get(urlStr)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		server.log.Error(resp.StatusCode, err)
-		return err.Error()
+		result.Msg = err.Error()
+		return
 	}
 	defer func() {
 		if err = resp.Body.Close(); err != nil {
@@ -97,7 +153,8 @@ func (server *Server) load(urlStr string) (errStr string) {
 		}
 	}()
 	if resp.ContentLength > int64(SizeLimit) {
-		return "size limit exceeded"
+		result.Msg = "size limit exceeded"
+		return
 	}
 
 	var fileType *string
@@ -119,13 +176,15 @@ func (server *Server) load(urlStr string) (errStr string) {
 	scanner := bufio.NewScanner(io.TeeReader(resp.Body, &buffer))
 	for scanner.Scan() {
 		if buffer.Len() > SizeLimit {
-			return "size limit exceeded"
+			result.Msg = "size limit exceeded"
+			return
 		}
 
 		tmpStr := scanner.Text()
 		fields := strings.Fields(tmpStr)
 		if len(fields) < 2 {
 			server.log.Debug("invalid line:", tmpStr)
+			continue
 		}
 
 		lastName := fields[0]
@@ -139,7 +198,7 @@ func (server *Server) load(urlStr string) (errStr string) {
 			Properties: make(map[string]interface{}),
 		}
 
-		// Add any attributes
+		// Add any attributes (if any)
 		for _, fragment := range fields[2:] {
 			attribute := strings.SplitN(fragment, "=", 2)
 			if len(attribute) != 2 {
@@ -177,87 +236,118 @@ func (server *Server) load(urlStr string) (errStr string) {
 	})
 	if err != nil {
 		server.log.Error(err)
-		return err.Error()
+		result.Msg = err.Error()
+		return
 	}
-
-	return ""
+	result.Success = true
+	result.Msg = "Successful operation"
+	return
 }
 
-func (server *Server) resultWriter(w http.ResponseWriter, done bool, errMsg string) {
-	res := Result{
-		Success: done,
-		Msg:     errMsg,
+func (server *Server) query(result *Result, pk string, rk string) {
+	var filter string
+	result.IsQuery = true
+	if pk != "" && rk != "" {
+		filter = fmt.Sprintf("PartitionKey eq '%s' and RowKey eq '%s'", pk, rk)
+	} else if pk != "" {
+		filter = fmt.Sprintf("PartitionKey eq '%s'", pk)
+	} else if rk != "" {
+		filter = fmt.Sprintf("RowKey eq '%s'", rk)
+	} else {
+		result.Msg = "first and/or last name must be provided"
+		return
 	}
 
-	w.WriteHeader(http.StatusOK)
-	err := server.rootTemplate.Execute(w, res)
-	if err != nil {
-		server.log.Error(err)
+	q := server.tableClient.List(&aztables.ListEntitiesOptions{
+		Filter: &filter,
+	})
+
+	// TODO: add page support
+	for q.NextPage(context.TODO()) {
+		var entity aztables.EDMEntity
+		result.QueryRes = make([]string, len(q.PageResponse().Entities))
+		for i, entityBytes := range q.PageResponse().Entities {
+			if err := json.Unmarshal(entityBytes, &entity); err != nil {
+				server.log.Debug("error unmarshalling result")
+				continue
+			}
+			server.log.Debugf("pk: %s\trk: %s", entity.PartitionKey, entity.RowKey)
+			result.QueryRes[i] = entity.PartitionKey + " " + entity.RowKey
+			for key, val := range entity.Properties {
+				result.QueryRes[i] += " " + key + "=" + val.(string)
+			}
+		}
 	}
+
+	result.Success = true
+	result.Msg = "Successful operation"
+	return
 }
 
-func (server *Server) clearHandler(w http.ResponseWriter, r *http.Request) {
-	// TODO: do stuff
-	http.Redirect(w, r, "/success?o=clear", http.StatusPermanentRedirect)
+func (server *Server) clearHandler(w http.ResponseWriter, _ *http.Request) {
+	server.log.Debug("/clear called")
+	result := Result{}
+	defer func() {
+		data, err := json.Marshal(&result)
+		if err != nil {
+			data = []byte{}
+		}
+		_, _ = w.Write(data)
+	}()
+
+	server.clear(&result)
 }
 
 func (server *Server) loadHandler(w http.ResponseWriter, r *http.Request) {
-	var redirectUrl string
+	server.log.Debug("/load called")
+	result := Result{}
 	defer func() {
-		http.Redirect(w, r, redirectUrl, http.StatusPermanentRedirect)
+		data, err := json.Marshal(&result)
+		if err != nil {
+			data = []byte{}
+		}
+		_, _ = w.Write(data)
 	}()
 
 	rawUrlStr := r.PostFormValue("url")
 	if len(rawUrlStr) == 0 {
-		redirectUrl = "/error?o=load"
+		result.Msg = "url cannot be empty"
 		return
 	}
 
 	u, err := url.ParseRequestURI(rawUrlStr)
 	if err != nil {
-		redirectUrl = "/error?o=load"
+		result.Msg = "url is invalid"
 		return
 	}
 
-	urlStr := u.String()
-	//TODO: do stuff
-	server.log.Debugf(urlStr)
-	redirectUrl = "/success?o=load"
+	server.load(&result, u.String())
 }
 
 func (server *Server) queryHandler(w http.ResponseWriter, r *http.Request) {
+	server.log.Debug("/q called")
+	result := Result{
+		IsQuery: true,
+	}
+	defer func() {
+		data, err := json.Marshal(&result)
+		if err != nil {
+			data = []byte{}
+		}
+		_, _ = w.Write(data)
+	}()
+
 	vars := mux.Vars(r)
 	//TODO: do stuff
 	fmt.Println("first:", vars["first"])
 	fmt.Println("last:", vars["last"])
-	server.resultWriter(w, true, "Query result...")
-}
-
-func (server *Server) errorHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		http.Redirect(w, r, "/", http.StatusPermanentRedirect)
-		return
-	}
-	vars := mux.Vars(r)
-	server.resultWriter(w, false, vars["operation"])
-}
-
-func (server *Server) successHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodGet {
-		http.Redirect(w, r, "/", http.StatusPermanentRedirect)
-		return
-	}
-	vars := mux.Vars(r)
-	server.resultWriter(w, true, "Successful "+vars["operation"])
+	server.query(&result, vars["first"], vars["last"])
 }
 
 func (server *Server) rootHandler(w http.ResponseWriter, _ *http.Request) {
+	server.log.Debug("/ called")
 	w.WriteHeader(http.StatusOK)
-	res := Result{
-		Success: true,
-		Msg:     "",
-	}
-	err := server.rootTemplate.Execute(w, res)
+	err := server.rootTemplate.Execute(w, nil)
 	if err != nil {
 		server.log.Debug(err)
 		return
@@ -276,8 +366,6 @@ func main() {
 	r.HandleFunc("/q", server.queryHandler).Methods(http.MethodGet).Queries("first", "{first}", "last", "{last}")
 	r.HandleFunc("/load", server.loadHandler).Methods(http.MethodPost)
 	r.HandleFunc("/clear", server.clearHandler).Methods(http.MethodPost)
-	r.HandleFunc("/success", server.successHandler).Methods(http.MethodGet, http.MethodPost).Queries("o", "{operation}")
-	r.HandleFunc("/error", server.errorHandler).Methods(http.MethodGet, http.MethodPost).Queries("o", "{operation}")
 
 	_ = http.ListenAndServe(":8000", r)
 }
