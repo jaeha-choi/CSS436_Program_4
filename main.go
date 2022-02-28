@@ -263,7 +263,13 @@ func (server *Server) query(result *Result, pk string, rk string) {
 	})
 
 	// TODO: add page support
-	for q.NextPage(context.TODO()) {
+	hasPage := q.NextPage(context.TODO())
+	if !hasPage {
+		result.Success = true
+		result.Msg = "no match found"
+		return
+	}
+	for hasPage {
 		var entity aztables.EDMEntity
 		result.QueryRes = make([]string, len(q.PageResponse().Entities))
 		for i, entityBytes := range q.PageResponse().Entities {
@@ -277,10 +283,10 @@ func (server *Server) query(result *Result, pk string, rk string) {
 				result.QueryRes[i] += " " + key + "=" + val.(string)
 			}
 		}
+		hasPage = q.NextPage(context.TODO())
 	}
 
 	result.Success = true
-	result.Msg = "Successful operation"
 	return
 }
 

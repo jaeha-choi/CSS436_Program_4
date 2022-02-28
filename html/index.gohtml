@@ -73,7 +73,7 @@
                 }
                 status.innerHTML = "<p>Status: " + statStr + "</p>";
 
-                if (j["is_query"] && j["success"]) {
+                if (j["is_query"] && j["success"] && j["query_res"] != null) {
                     let list = document.createElement("ul");
                     j["query_res"].forEach((line) => {
                         let liElem = document.createElement("li");
