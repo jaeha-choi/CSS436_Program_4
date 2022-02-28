@@ -26,8 +26,9 @@ const SizeLimit int = 1 << 20
 const tableName string = "prog4"
 
 type Server struct {
+	cleared            bool
+	opMutex            sync.Mutex
 	blobClient         azblob.BlockBlobClient
-	tableMutex         sync.Mutex
 	tableClient        *aztables.Client
 	tableServiceClient *aztables.ServiceClient
 	rootTemplate       *template.Template
@@ -99,6 +100,15 @@ func (server *Server) createNewTable() (*aztables.Client, error) {
 }
 
 func (server *Server) clear(res *Result) {
+	server.opMutex.Lock()
+	defer server.opMutex.Unlock()
+
+	if server.cleared {
+		res.Success = true
+		res.Msg = "cleared blob/table"
+		return
+	}
+
 	// Delete table
 	_, err := server.tableClient.Delete(context.TODO(), nil)
 	if err != nil {
@@ -123,12 +133,17 @@ func (server *Server) clear(res *Result) {
 		return
 	}
 
+	server.cleared = true
 	res.Success = true
 	res.Msg = "cleared blob/table"
 	return
 }
 
 func (server *Server) load(result *Result, urlStr string) {
+	server.opMutex.Lock()
+	defer server.opMutex.Unlock()
+	server.cleared = false
+
 	if _, err := url.ParseRequestURI(urlStr); err != nil {
 		result.Msg = "invalid url"
 		return
