@@ -45,14 +45,14 @@ type Result struct {
 func initialize() (server *Server, err error) {
 	server = &Server{}
 
-	server.log = NewLogger(os.Stdout, DEBUG, "")
+	server.log = NewLogger(os.Stdout, INFO, "")
 
 	server.rootTemplate = template.Must(template.ParseFiles("./html/index.gohtml"))
 	blobCred, err := azblob.NewSharedKeyCredential(os.Getenv("PROG_4_AZURE_ACCOUNT"), os.Getenv("PROG_4_AZURE_KEY"))
 	if err != nil {
 		return nil, err
 	}
-	server.blobClient, err = azblob.NewBlockBlobClientWithSharedKey(os.Getenv("PROG_4_BLOB_URL")+"/"+"index.txt", blobCred, nil)
+	server.blobClient, err = azblob.NewBlockBlobClientWithSharedKey(os.Getenv("PROG_4_BLOB_URL")+"/"+"input.txt", blobCred, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -148,18 +148,24 @@ func (server *Server) load(result *Result, urlStr string) {
 		result.Msg = "invalid url"
 		return
 	}
-	_, err := server.blobClient.StartCopyFromURL(context.TODO(), urlStr, nil)
-	if err != nil {
-		server.log.Error(err)
-		result.Msg = err.Error()
-		return
-	}
+
+	// Uploading directly from the URL works fine too,
+	// but since load func downloads the file from the URL anyways, upload it in this function.
+	//_, err := server.blobClient.StartCopyFromURL(context.TODO(), urlStr, nil)
+	//if err != nil {
+	//	server.log.Error(err)
+	//	result.Msg = err.Error()
+	//	return
+	//}
 
 	//Download from the URL
 	resp, err := http.Get(urlStr)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		server.log.Error(resp.StatusCode, err)
-		result.Msg = err.Error()
+		result.Msg = fmt.Sprintf("status code: %d ", resp.StatusCode)
+		if err != nil {
+			result.Msg += "error: " + err.Error()
+		}
 		return
 	}
 	defer func() {
@@ -251,11 +257,11 @@ func (server *Server) load(result *Result, urlStr string) {
 	})
 	if err != nil {
 		server.log.Error(err)
-		result.Msg = err.Error()
+		result.Msg = "error while uploading to a blob"
 		return
 	}
 	result.Success = true
-	result.Msg = "Successful operation"
+	result.Msg = "loaded blob/table. Blob can be found <a href=\"" + server.blobClient.URL() + "\">here</a>"
 	return
 }
 
@@ -359,9 +365,6 @@ func (server *Server) queryHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	vars := mux.Vars(r)
-	//TODO: do stuff
-	fmt.Println("first:", vars["first"])
-	fmt.Println("last:", vars["last"])
 	server.query(&result, vars["first"], vars["last"])
 }
 
