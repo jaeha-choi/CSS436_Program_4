@@ -14,7 +14,7 @@
                 <label>
                     URL of test file:
                     <input type="text" name="url">
-                    <input type="submit" value="Upload">
+                    <input type="submit" value="Upload" id="url_submit">
                 </label>
             </div>
         </form>
@@ -22,7 +22,7 @@
             <div>
                 <label>
                     Clear data
-                    <input type="submit" value="Clear">
+                    <input type="submit" value="Clear" id="clear_submit">
                 </label>
             </div>
         </form>
@@ -43,7 +43,7 @@
                 </label>
             </div>
             <div>
-                <input type="submit" value="Query">
+                <input type="submit" value="Query" id="query_submit">
             </div>
         </form>
     </fieldset>
@@ -55,6 +55,14 @@
 </div>
 <script type="text/javascript">
     async function helper(request, init) {
+        const uButton = document.getElementById("url_submit");
+        const cButton = document.getElementById("clear_submit");
+        const qButton = document.getElementById("query_submit");
+
+        uButton.disabled = true;
+        cButton.disabled = true;
+        qButton.disabled = true;
+
         const status = document.getElementById("result-status");
         const output = document.getElementById("result-output");
         status.innerHTML = "<p>Status: waiting...</p>";
@@ -90,6 +98,10 @@
                 console.debug(err);
                 status.innerHTML = "<p>Unknown error occurred</p>";
             })
+
+        uButton.disabled = false;
+        cButton.disabled = false;
+        qButton.disabled = false;
     }
 
     async function loadFunc() {
