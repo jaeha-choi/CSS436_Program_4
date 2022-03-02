@@ -27,7 +27,7 @@ const tableName string = "prog4"
 
 type Server struct {
 	cleared            bool
-	opMutex            sync.Mutex
+	opMutex            sync.RWMutex
 	blobClient         azblob.BlockBlobClient
 	tableClient        *aztables.Client
 	tableServiceClient *aztables.ServiceClient
@@ -266,6 +266,9 @@ func (server *Server) load(result *Result, urlStr string) {
 }
 
 func (server *Server) query(result *Result, pk string, rk string) {
+	server.opMutex.RLock()
+	defer server.opMutex.RUnlock()
+
 	var filter string
 	result.IsQuery = true
 	if pk != "" && rk != "" {
